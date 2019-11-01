@@ -1,9 +1,6 @@
 package server
 
-import handlers.AcceptHandler
-import handlers.Handler
-import handlers.ReadHandler
-import handlers.WriteHandler
+import handlers.*
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.nio.channels.SelectionKey
@@ -11,6 +8,9 @@ import java.nio.channels.Selector
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
 
 fun main() {
 
@@ -22,16 +22,18 @@ fun main() {
 
     ssc.register(selector, SelectionKey.OP_ACCEPT)
 
+    val newFixedThreadPool = Executors.newFixedThreadPool(10)
 
-
-    val pendingData: MutableMap<SocketChannel, Queue<ByteBuffer>> = HashMap()
+    val pendingData: MutableMap<SocketChannel, Queue<ByteBuffer>> = ConcurrentHashMap()
+    val selectorActions = ConcurrentLinkedQueue<Runnable>()
 
     val acceptHandler: Handler<SelectionKey> = AcceptHandler(pendingData)
-    val readHandler: Handler<SelectionKey> = ReadHandler(pendingData)
+    val readHandler: Handler<SelectionKey> = PoolReadHandler(newFixedThreadPool, selectorActions, pendingData)
     val writeHandler: Handler<SelectionKey> = WriteHandler(pendingData)
 
     while (true) {
         selector.select()
+        processSelectionActions(selectorActions)
         val keys = selector.selectedKeys()
         val iterator = keys.iterator()
         while (iterator.hasNext()) {
@@ -41,13 +43,24 @@ fun main() {
             if (key.isValid()) {
                 if (key.isAcceptable) {
                     acceptHandler.handle(key)
-                }else if (key.isReadable) {
+                } else if (key.isReadable) {
                     readHandler.handle(key)
-                }else if (key.isWritable) {
+                } else if (key.isWritable) {
                     writeHandler.handle(key)
                 }
             }
         }
 
+    }
+}
+
+fun processSelectionActions(selectorActions: ConcurrentLinkedQueue<Runnable>) {
+
+    var action: Runnable?
+
+    action = selectorActions.poll()
+    while (action != null) {
+        action.run()
+        action = selectorActions.poll()
     }
 }
